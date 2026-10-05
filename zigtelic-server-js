@@ -1,0 +1,50 @@
+import 'dotenv/config';
+import express from 'express';
+import { google } from 'googleapis';
+import crypto from 'crypto';
+
+const app = express();
+app.use(express.json());
+app.use(express.static('public'));
+const sessions = new Map();
+const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+const REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/oauth2callback';
+const oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI);
+const SCOPES = ['https://www.googleapis.com/auth/business.manage'];
+
+app.get('/api/config', (req,res)=>res.json({configured:!!(process.env.GOOGLE_CLIENT_ID&&process.env.GOOGLE_CLIENT_SECRET)}));
+app.get('/auth/google',(req,res)=>{
+  if(!CLIENT_ID || !CLIENT_SECRET) return res.status(400).send('Google OAuth is not configured. Copy .env.example to .env and add credentials.');
+  const state=crypto.randomBytes(24).toString('hex');
+  sessions.set(state,{});
+  res.redirect(oauth2Client.generateAuthUrl({access_type:'offline',scope:SCOPES,state,prompt:'consent'}));
+});
+app.get('/oauth2callback',async(req,res)=>{
+  try{
+    const {tokens}=await oauth2Client.getToken(req.query.code);
+    const sid=crypto.randomBytes(24).toString('hex'); sessions.set(sid,{tokens});
+    res.redirect('/?connected=1&sid='+sid);
+  }catch(e){res.status(500).send('OAuth failed: '+e.message)}
+});
+function clientFor(sid){const s=sessions.get(sid); if(!s?.tokens) throw new Error('Not connected'); const c=new google.auth.OAuth2(CLIENT_ID,CLIENT_SECRET,REDIRECT_URI); c.setCredentials(s.tokens); return c;}
+
+app.get('/api/accounts',async(req,res)=>{try{const c=clientFor(req.query.sid); const r=await google.mybusinessaccountmanagement({version:'v1',auth:c}).accounts.list(); res.json(r.data)}catch(e){res.status(400).json({error:e.message})}});
+app.get('/api/locations',async(req,res)=>{try{const c=clientFor(req.query.sid); const parent=req.query.parent; const r=await google.mybusinessbusinessinformation({version:'v1',auth:c}).accounts.locations.list({parent,readMask:'name,title,storefrontAddress'}); res.json(r.data)}catch(e){res.status(400).json({error:e.message})}});
+
+// Reviews/reply use the documented Business Profile v4 endpoints.
+async function gbpRequest(c,url,opts={}){const token=(await c.getAccessToken()).token; const r=await fetch(url,{...opts,headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json',...(opts.headers||{})}}); const text=await r.text(); let data; try{data=JSON.parse(text)}catch{data={raw:text}}; if(!r.ok) throw new Error(data.error?.message||text); return data;}
+app.get('/api/reviews',async(req,res)=>{try{const c=clientFor(req.query.sid); const {accountId,locationId}=req.query; const data=await gbpRequest(c,`https://mybusiness.googleapis.com/v4/accounts/${accountId}/locations/${locationId}/reviews?pageSize=50`); res.json(data)}catch(e){res.status(400).json({error:e.message})}});
+app.post('/api/reply',async(req,res)=>{try{const c=clientFor(req.body.sid); const {accountId,locationId,reviewId,comment}=req.body; const url=`https://mybusiness.googleapis.com/v4/accounts/${accountId}/locations/${locationId}/reviews/${reviewId}/reply`; const data=await gbpRequest(c,url,{method:'PUT',body:JSON.stringify({comment})}); res.json(data)}catch(e){res.status(400).json({error:e.message})}});
+
+app.post('/api/generate',async(req,res)=>{
+  const {review,business='Zigtelic'}=req.body;
+  if(!process.env.AI_API_KEY) return res.json({reply:defaultReply(review,business),mode:'template'});
+  try{
+    const prompt=`Write a short, natural Google review reply for ${business}. Review: ${review}. Reply in the same language when possible. Never invent facts, discounts, guarantees or personal information. 1-3 sentences.`;
+    const r=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:`Bearer ${process.env.AI_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({model:'gpt-5-mini',input:prompt})});
+    const d=await r.json(); res.json({reply:d.output_text||defaultReply(review,business),mode:'ai'});
+  }catch(e){res.json({reply:defaultReply(review,business),mode:'template'})}
+});
+function defaultReply(review,business){const s=String(review||'').toLowerCase(); if(/bad|worst|poor|not good|bekar|kharaab|खराब|बुरा/.test(s)) return `Thank you for sharing your feedback. We’re sorry your experience did not meet expectations. Please contact ${business} so we can understand the issue and improve.`; return `Thank you for your review and support! We’re glad you had a positive experience with ${business}. We look forward to serving you again.`;}
+app.listen(process.env.PORT||3000,()=>console.log('Zigtelic Review Auto-Reply running on http://localhost:'+(process.env.PORT||3000)));

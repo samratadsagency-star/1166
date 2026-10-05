@@ -1,0 +1,50 @@
+# Zigtelic Google Review Auto-Reply
+
+Node.js/Express web app for Google Business Profile review management.
+
+## Render deployment
+
+This project is configured for Render. **Do not use `mix phx.digest`**; that command is for Elixir/Phoenix and caused the previous build failure.
+
+Render settings:
+- Runtime: Node
+- Build Command: `npm install`
+- Start Command: `npm start`
+- Health Check: `/health`
+- Node: 20+
+
+If using the included `render.yaml`, create a Blueprint from the repository and Render will use these settings.
+
+## Environment variables on Render
+
+Set:
+- `GOOGLE_CLIENT_ID` = your Google OAuth Client ID
+- `GOOGLE_CLIENT_SECRET` = your Google OAuth Client Secret (keep private)
+- `GOOGLE_REDIRECT_URI` = `https://YOUR-RENDER-DOMAIN.onrender.com/oauth2callback`
+- `AI_API_KEY` = optional AI key
+
+The Google OAuth Client ID supplied for this project is:
+`626200116380-7vrpuae89d7jstk6iu4oh55u036duf5k.apps.googleusercontent.com`
+
+In Google Cloud Console, add the exact Render callback URL to the OAuth client's **Authorized redirect URIs**.
+
+## Local
+
+```bash
+npm install
+npm start
+```
+
+Open `http://localhost:3000`.
+
+## Google permissions
+
+The app requests the `https://www.googleapis.com/auth/business.manage` OAuth scope. Google Business Profile API access/approval and an eligible Google Business Profile account are required. Never put the Client Secret in frontend code or GitHub.
+
+## Features
+- Google OAuth login
+- Business account/location discovery API
+- Review listing
+- AI/template reply generation
+- Human confirmation before publishing
+- Google Business Profile review reply endpoint
